@@ -80,8 +80,13 @@ runs:
         python -m pypi_attestations sign "${dists[@]}"
 
         echo "Publishing Pip package to pypi with trusted publishing:"
+        # twine only attaches attestations that are passed as inputs alongside
+        # their distributions; it does not discover them on disk.
+        attestations=()
+        for d in "${dists[@]}"; do attestations+=("${d}.publish.attestation"); done
+
         python -m twine upload -u __token__ -p "${token}" \
-          --attestations --skip-existing --verbose "${dists[@]}"
+          --attestations --skip-existing --verbose "${dists[@]}" "${attestations[@]}"
       shell: bash
     - name: Publish Python SDK
       if: ${{ inputs.pypiTrustedPublishing != 'true' }}
