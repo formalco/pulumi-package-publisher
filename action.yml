@@ -60,8 +60,9 @@ inputs:
     description: |
       Publish the Python SDK to PyPI using trusted publishing instead of PYPI_PASSWORD.
 
-      When enabled, pypa/gh-action-pypi-publish exchanges a GitHub Actions OIDC
-      token for a short-lived PyPI API token. Requires `id-token: write`.
+      When enabled, a GitHub Actions OIDC token is exchanged for a short-lived
+      PyPI API token and the upload carries PEP 740 attestations. Requires
+      `id-token: write`.
     required: false
     default: 'false'
 

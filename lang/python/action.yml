@@ -41,12 +41,58 @@ runs:
           exit 1
         fi
       shell: bash
+    # Trusted publishing is done by hand rather than with pypa/gh-action-pypi-publish:
+    # nested inside this composite action, that action resolves its Docker image
+    # from the outer action's github.action_repository/action_ref and fails to pull
+    # (actions/runner#2473, pypa/gh-action-pypi-publish#299).
+    - name: Install Twine
+      run: |
+        python -m pip install pip twine
+        if [[ "${{ inputs.pypiTrustedPublishing }}" == "true" ]]; then
+          python -m pip install pypi-attestations
+        fi
+      shell: bash
+    - name: Publish Python SDK (trusted publishing)
+      if: ${{ inputs.pypiTrustedPublishing == 'true' }}
+      working-directory: ${{ github.workspace }}/sdk/python/bin/dist
+      run: |
+        set -euo pipefail
+        shopt -s nullglob
+        dists=(*.whl *.tar.gz)
+        if [[ ${#dists[@]} -eq 0 ]]; then
+          echo "No Python distributions found in $PWD"
+          exit 1
+        fi
+
+        json() { python -c "import json,sys; print(json.load(sys.stdin)[sys.argv[1]])" "$1"; }
+
+        # Exchange a GitHub Actions OIDC token for a short-lived PyPI API token.
+        audience=$(curl -fsS https://pypi.org/_/oidc/audience | json audience)
+        oidc=$(curl -fsS -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+          "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${audience}" | json value)
+        echo "::add-mask::${oidc}"
+        token=$(python -c "import json,sys; print(json.dumps({'token': sys.argv[1]}))" "${oidc}" \
+          | curl -fsS -X POST -H "Content-Type: application/json" --data-binary @- \
+            https://pypi.org/_/oidc/mint-token | json token)
+        echo "::add-mask::${token}"
+
+        # Sign PEP 740 attestations (Sigstore, via the ambient GitHub OIDC identity).
+        python -m pypi_attestations sign "${dists[@]}"
+
+        echo "Publishing Pip package to pypi with trusted publishing:"
+        python -m twine upload -u __token__ -p "${token}" \
+          --attestations --skip-existing --verbose "${dists[@]}"
+      shell: bash
     - name: Publish Python SDK
-      uses: pypa/gh-action-pypi-publish@release/v1
-      with:
-        packages-dir: ${{ github.workspace }}/sdk/python/bin/dist/
-        skip-existing: true
-        verbose: true
-        user: ${{ inputs.pypiTrustedPublishing == 'true' && '__token__' || env.PYPI_USERNAME || 'pulumi' }}
-        password: ${{ inputs.pypiTrustedPublishing != 'true' && env.PYPI_PASSWORD || '' }}
-        attestations: ${{ inputs.pypiTrustedPublishing == 'true' }}
+      if: ${{ inputs.pypiTrustedPublishing != 'true' }}
+      run: if [ -n "${PYPI_USERNAME}" ] ;
+        then PYPI_PUBLISH_USERNAME=${PYPI_USERNAME};
+        else PYPI_PUBLISH_USERNAME="pulumi";
+        fi &&
+        echo "Publishing Pip package to pypi as ${PYPI_PUBLISH_USERNAME}:" &&
+        twine upload
+        -u "${PYPI_PUBLISH_USERNAME}" -p "${PYPI_PASSWORD}"
+        "${{ github.workspace }}/sdk/python/bin/dist/*"
+        --skip-existing
+        --verbose
+      shell: bash
