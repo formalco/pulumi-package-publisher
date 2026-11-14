@@ -46,11 +46,7 @@ runs:
     # from the outer action's github.action_repository/action_ref and fails to pull
     # (actions/runner#2473, pypa/gh-action-pypi-publish#299).
     - name: Install Twine
-      run: |
-        python -m pip install pip twine
-        if [[ "${{ inputs.pypiTrustedPublishing }}" == "true" ]]; then
-          python -m pip install pypi-attestations
-        fi
+      run: python -m pip install pip twine
       shell: bash
     - name: Publish Python SDK (trusted publishing)
       if: ${{ inputs.pypiTrustedPublishing == 'true' }}
@@ -72,21 +68,18 @@ runs:
           "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${audience}" | json value)
         echo "::add-mask::${oidc}"
         token=$(python -c "import json,sys; print(json.dumps({'token': sys.argv[1]}))" "${oidc}" \
-          | curl -fsS -X POST -H "Content-Type: application/json" --data-binary @- \
+          | curl -sS --fail-with-body -X POST -H "Content-Type: application/json" --data-binary @- \
             https://pypi.org/_/oidc/mint-token | json token)
         echo "::add-mask::${token}"
 
-        # Sign PEP 740 attestations (Sigstore, via the ambient GitHub OIDC identity).
-        python -m pypi_attestations sign "${dists[@]}"
-
+        # No PEP 740 attestations: PyPI verifies them against the Trusted Publisher
+        # that minted the token, by the certificate's Build Config URI. GitHub sets
+        # that to the *top-level* workflow, while the token exchange matches
+        # job_workflow_ref, so when this runs inside a reusable workflow (as
+        # pulumi providers' publish.yml is) no publisher can satisfy both.
         echo "Publishing Pip package to pypi with trusted publishing:"
-        # twine only attaches attestations that are passed as inputs alongside
-        # their distributions; it does not discover them on disk.
-        attestations=()
-        for d in "${dists[@]}"; do attestations+=("${d}.publish.attestation"); done
-
         python -m twine upload -u __token__ -p "${token}" \
-          --attestations --skip-existing --verbose "${dists[@]}" "${attestations[@]}"
+          --skip-existing --verbose "${dists[@]}"
       shell: bash
     - name: Publish Python SDK
       if: ${{ inputs.pypiTrustedPublishing != 'true' }}
